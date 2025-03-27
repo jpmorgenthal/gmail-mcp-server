@@ -1,3 +1,4 @@
+import venv
 from typing import Any
 import argparse
 import os
@@ -240,12 +241,13 @@ class GmailService:
             labelID = next((labeli['id'] for labeli in labelList['labels'] if labeli.get('name') == label), None)
             logger.info(f"Label ID: {labelID}")
             if not labelID:
-                return f"Label {label} not found."
+                return json.dumps({'error': 'true', 'message': f"Label '{label}' not found."})
 
             message = self.service.users().messages().modify(userId=user_id, 
                                         id=email_id, 
                                         body={'addLabelIds': [labelID]}).execute()
-            return message
+#            logger.info(f"Modify Results:{message}")
+            return json.dumps(message)
 
         except HttpError as error:
             return f"An ttpError occurred: {str(error)}"
@@ -513,9 +515,13 @@ async def main(creds_file_path: str,
                 raise ValueError("Missing email ID parameter")
             logger.info(f"Email ID: {email_id}")
             send_response = await gmail_service.label_email(email_id, label)
+            json_data = json.loads(send_response)
+            logger.info(f"Labeling response: {send_response}")
+            if not json_data.get("id", None):
+                # If the label was not found, return an error message
+                raise ValueError(f"{json_data['message']}")
             
-            if send_response["status"] == "success":
-                response_text = f"Email successfully classified {message_id}"
+            response_text = f"Email successfully classified {email_id}"
             return [types.TextContent(type="text", text=response_text)]
 
         if name == "send-email":
