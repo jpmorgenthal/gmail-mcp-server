@@ -4,6 +4,7 @@ import os
 import asyncio
 import logging
 import base64
+import json
 from email.message import EmailMessage
 from email.header import decode_header
 from base64 import urlsafe_b64decode
@@ -34,7 +35,7 @@ You have the following tools available:
 - Send an email (send-email)
 - Retrieve unread emails (get-unread-emails)
 - Read email content (read-email)
-- Trash email (tras-email)
+- Trash email (trash-email)
 - Open email in browser (open-email)
 Never send an email draft or trash an email unless the user confirms first. 
 Always ask for approval if not already given.
@@ -49,7 +50,7 @@ PROMPTS = {
     ),
     "draft-email": types.Prompt(
         name="draft-email",
-        description="Draft an email with cotent and recipient",
+        description="Draft an email with content and recipient",
         arguments=[
             types.PromptArgument(
                 name="content",
@@ -118,6 +119,17 @@ class GmailService:
         self.user_email = self._get_user_email()
         logger.info(f"User email retrieved: {self.user_email}")
 
+    def load_user_secrets_from_local(self, user_secrets_file, scopes):
+        logger.info(f'Loading user secrets from {user_secrets_file}')
+        with open(user_secrets_file, 'r') as stream:
+            creds_json = json.load(stream)
+            creds = Credentials.from_authorized_user_info(creds_json, scopes)
+            # workaround for
+            # https://github.com/googleapis/google-auth-library-python/issues/501
+            creds.token = creds_json['token']
+            return creds
+        return None
+
     def _get_token(self) -> Credentials:
         """Get or refresh Google API token"""
 
@@ -125,7 +137,7 @@ class GmailService:
     
         if os.path.exists(self.token_path):
             logger.info('Loading token from file')
-            token = Credentials.from_authorized_user_file(self.token_path, self.scopes)
+            token = self.load_user_secrets_from_local(self.token_path, self.scopes)
 
         if not token or not token.valid:
             if token and token.expired and token.refresh_token:
@@ -134,7 +146,7 @@ class GmailService:
             else:
                 logger.info('Fetching new token')
                 flow = InstalledAppFlow.from_client_secrets_file(self.creds_file_path, self.scopes)
-                token = flow.run_local_server(port=0)
+                token = flow.run_local_server()
 
             with open(self.token_path, 'w') as token_file:
                 token_file.write(token.to_json())
@@ -193,23 +205,50 @@ class GmailService:
         Returns list of messsage IDs in key 'id'."""
         try:
             user_id = 'me'
-            query = 'in:inbox is:unread category:primary'
+            query = 'in:inbox is:unread'
 
             response = self.service.users().messages().list(userId=user_id,
-                                                        q=query).execute()
+                                                        q=query,
+                                                        maxResults=20).execute()
             messages = []
             if 'messages' in response:
                 messages.extend(response['messages'])
 
-            while 'nextPageToken' in response:
-                page_token = response['nextPageToken']
-                response = self.service.users().messages().list(userId=user_id, q=query,
-                                                    pageToken=page_token).execute()
-                messages.extend(response['messages'])
+#            while 'nextPageToken' in response:
+#                page_token = response['nextPageToken']
+#                response = self.service.users().messages().list(userId=user_id, q=query,
+#                                                    pageToken=page_token).execute()
+#                messages.extend(response['messages'])
             return messages
 
         except HttpError as error:
             return f"An HttpError occurred: {str(error)}"
+
+
+    async def label_email(self, email_id:str, label:str) -> str:
+        """
+        Retrieves unread messages from mailbox.
+        Returns list of messsage IDs in key 'id'."""
+        try:
+            user_id = 'me'
+            logger.info("Entered label_email")
+            labelList = self.service.users().labels().list(userId=user_id).execute()
+
+            if 'labels' not in labelList:
+                return "No labels found in the account."
+                
+            labelID = next((labeli['id'] for labeli in labelList['labels'] if labeli.get('name') == label), None)
+            logger.info(f"Label ID: {labelID}")
+            if not labelID:
+                return f"Label {label} not found."
+
+            message = self.service.users().messages().modify(userId=user_id, 
+                                        id=email_id, 
+                                        body={'addLabelIds': [labelID]}).execute()
+            return message
+
+        except HttpError as error:
+            return f"An ttpError occurred: {str(error)}"
 
     async def read_email(self, email_id: str) -> dict[str, str]| str:
         """Retrieves email contents including to, from, subject, and contents."""
@@ -397,6 +436,24 @@ async def main(creds_file_path: str,
                 },
             ),
             types.Tool(
+                name="label-email",
+                description="Label email with given label",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "email_id": {
+                            "type": "string",
+                            "description": "Email ID",
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "Label to apply",
+                        },
+                    },
+                    "required": ["email_id", "label"],
+                },
+            ),
+            types.Tool(
                 name="read-email",
                 description="Retrieves given email content",
                 inputSchema={
@@ -444,6 +501,22 @@ async def main(creds_file_path: str,
     async def handle_call_tool(
         name: str, arguments: dict | None
     ) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
+
+        if name == "label-email":
+            logger.info("Labeling email")
+            label = arguments.get("label")
+            if not label:
+                raise ValueError("Missing recipient parameter")
+            logger.info(f"Label: {label}")
+            email_id = arguments.get("email_id")
+            if not email_id:
+                raise ValueError("Missing email ID parameter")
+            logger.info(f"Email ID: {email_id}")
+            send_response = await gmail_service.label_email(email_id, label)
+            
+            if send_response["status"] == "success":
+                response_text = f"Email successfully classified {message_id}"
+            return [types.TextContent(type="text", text=response_text)]
 
         if name == "send-email":
             recipient = arguments.get("recipient_id")

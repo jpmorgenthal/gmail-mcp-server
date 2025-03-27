@@ -1,0 +1,1 @@
+npx @modelcontextprotocol/inspector uv run /Users/jeffreymorgenthal/AI/gmail-mcp-server/src/gmail/server.py --creds-file-path /Users/jeffreymorgenthal/.google/client_creds.json --token-path /Users/jeffreymorgenthal/.google/app_tokens.json
