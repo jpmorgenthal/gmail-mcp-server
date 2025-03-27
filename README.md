@@ -51,7 +51,7 @@ https://github.com/user-attachments/assets/5794cd16-00d2-45a2-884a-8ba0c3a90c90
   - Adds a label to the email
   - Input:
     - `email_id` (string): Auto-generated ID of email
-    - 'label' (string): A label already existing on your Gmail account
+    - `label` (string): A label already existing on your Gmail account
   - Returns success message
 
 ## Setup
