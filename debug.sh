@@ -1,3 +1,0 @@
-npx @modelcontextprotocol/inspector uv --directory /Users/jeffreymorgenthal/AI/gmail-mcp-server-1/src/gmail run server.py --creds-file-path /Users/jeffreymorgenthal/.google/client_creds.json --token-path /Users/jeffreymorgenthal/.google/app_tokens.json
-
-uv --directory /Users/jeffreymorgenthal/AI/gmail-mcp-server-1/src/gmail run autolabel.py --creds-file-path /Users/jeffreymorgenthal/.google/client_creds.json --token-path /Users/jeffreymorgenthal/.google/app_tokens.json
