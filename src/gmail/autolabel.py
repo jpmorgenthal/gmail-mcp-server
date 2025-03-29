@@ -261,7 +261,7 @@ class GmailService:
     async def read_email(self, email_id: str) -> dict[str, str]| str:
         """Retrieves email contents including to, from, subject, and contents."""
         try:
-            msg = self.service.users().messages().get(userId="me", id=email_id, format='raw').execute()
+            msg = self.service.messages().get(userId="me", id=email_id, format='raw').execute()
             email_metadata = {}
 
             # Decode the base64URL encoded raw content
@@ -344,7 +344,7 @@ class GmailService:
         Returns:
             list[dict]: A list of results containing email metadata and actions taken.
         """
-        ollama_api_url = "http://localhost:11434/api/chat"
+        ollama_api_url = "http://localhost:11434/api/generate"
         try:
             # Step 1: Retrieve unread emails
             unread_emails = await self.get_unread_emails()
@@ -375,6 +375,9 @@ class GmailService:
                 logger.debug(f"Ollama response for email {email_id}: {response}")
             
                 label = response.get("message", False).get("content", False)
+                # Remove entire string containing <think> tags from labels
+                #if label and "</think>" in label:
+                    #label = label.split("</think>")[1].strip()
                 logger.info(f"Label determined for email {email_id}: {label}")
 
                 # Step 5: Label unimportant emails as 'Ads'
@@ -411,25 +414,22 @@ class GmailService:
         try:
             async with aiohttp.ClientSession(headers={'Content-Type': 'application/json'}) as session:
                 payload = {
-                    "model": "deepseek-r1:32b",
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "You are an email assistant. "
-                                       "Determine if the following email is an advertisement, spam or important. "
-                                        "if important, respond with Review If an advertisment respond with Ads If it discusses political themes respond with TRASH "
-                                        "if email does not identify me directly as JP or Jeffrey then consider it an advertisement. "
-                                        "If the sentiment is personal, respond with Review " 
-                                        "If the content is HTML use the reply-to address to determine if it is spam or not. "
-                                        "return only one word answers "
-                        },
-                        {
-                            "role": "user",
-                            "content": json.dumps(email_content) # Encode dictionary as JSON string
-                        }],
-                    "stream": False
+                    "model": "llama3.2",
+                    "prompt": "You are an email assistant. "
+                                "Determine if the following email is an advertisement, spam or important. "
+                                "if important, respond with 'Review' If an advertisment respond with 'Ads' If it discusses political themes respond with 'TRASH' "
+                                "if email does not identify me directly as JP or Jeffrey then consider it an advertisement. "
+                                "If the sentiment is personal, respond with 'Review' " 
+                                "If the content is HTML don't evaluate it instead use the reply-to address to determine if it is spam or not. "
+                                "return only one word answers." +
+                                json.dumps(email_content),
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.5,
+                        "max_tokens": 100,
+                    },
                 }
-                logger.info(payload)
+                #logger.info(payload)
                 
                 logger.debug(f"Sending request to Oa API: {payload}")
                 headers = {'Content-Type': 'application/json'}
