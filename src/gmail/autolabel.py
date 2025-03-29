@@ -2,6 +2,7 @@ import venv
 from typing import Any
 import argparse
 import os
+from bs4 import BeautifulSoup
 import asyncio
 import logging
 import base64
@@ -210,7 +211,7 @@ class GmailService:
 
             response = self.service.users().messages().list(userId=user_id,
                                                         q=query,
-                                                        maxResults=20).execute()
+                                                        maxResults=100).execute()
             messages = []
             if 'messages' in response:
                 messages.extend(response['messages'])
@@ -261,7 +262,7 @@ class GmailService:
     async def read_email(self, email_id: str) -> dict[str, str]| str:
         """Retrieves email contents including to, from, subject, and contents."""
         try:
-            msg = self.service.messages().get(userId="me", id=email_id, format='raw').execute()
+            msg = self.service.users().messages().get(userId="me", id=email_id, format='raw').execute()
             email_metadata = {}
 
             # Decode the base64URL encoded raw content
@@ -276,27 +277,26 @@ class GmailService:
             body = None
             if mime_message.is_multipart():
                 for part in mime_message.walk():
-                    # Extract the text/plain part
-                    logger.info(f"Part: {part.get_content_type()}")
-                    if part.get_content_type() == "text/plain":
-                        try:
-                            body = mime_message.get_payload(decode=True).decode('utf-8')
-                        except UnicodeDecodeError:
-                            # Fallback to other common encodings or ignore errors
-                            body = mime_message.get_payload(decode=True).decode('latin-1', errors='replace')
-                    break
+                    ctype = part.get_content_type()
+                    cdispo = str(part.get('Content-Disposition'))
+
+                    # skip any text/plain (txt) attachments
+                    if ctype == 'text/plain' and 'attachment' not in cdispo:
+                        body = part.get_payload(decode=True)  # decode
+                        break
             else:
-                # For non-multipart messages
-                body = mime_message.get_payload(decode=True).decode('utf-8')
+                body = mime_message.get_payload(decode=True)
 
-            if not body:
-                # Fallback to the raw content if no text/plain part is found
-                body = "THIS IS SPAM"
+            try:
+                soup = BeautifulSoup(body, features="html.parser")
+                body = soup.get_text()
+            except Exception as e:
+                logger.error(f"Error parsing HTML: {e}")
 
-            if self.count_words(body) > 10000:
-                # Truncate the body to the first 10000 words 
-                words = body.split()
-                body = ' '.join(words[:10000])
+#            if self.count_words(body) > 2000:
+ #               # Truncate the body to the first 10000 words 
+  #              words = body.split()
+   #             body = ' '.join(words[:2000])
 
             email_metadata['content'] = body
             
@@ -368,18 +368,19 @@ class GmailService:
                 if isinstance(email_content, str):  # Handle error case
                     logger.error(f"Failed to read email {email_id}: {email_content}")
                     continue
-
+    
+            
                 # Step 4: Send email content to Ollama for importance determination
-                response = await self.send_to_ollama(ollama_api_url, email_content)
-                
+                #logger.info(f"Sending {email_content} to LLM")
+                response = await self.send_to_ollama(ollama_api_url, str(email_content))
                 logger.debug(f"Ollama response for email {email_id}: {response}")
             
-                label = response.get("message", False).get("content", False)
+                label = response.get("response", False)
                 # Remove entire string containing <think> tags from labels
-                #if label and "</think>" in label:
-                    #label = label.split("</think>")[1].strip()
+                if label and "</think>" in label:
+                    label = label.split("</think>")[1].strip()
                 logger.info(f"Label determined for email {email_id}: {label}")
-
+                
                 # Step 5: Label unimportant emails as 'Ads'
                 if label:
                     label_response = await self.label_email(email_id, label)
@@ -388,14 +389,12 @@ class GmailService:
                 results.append({
                     "email_id": email_id,
                     "label": label,
-                    "label_response": label_response,
-                    "ollama_response": response
                 })
 
             return results
 
         except Exception as e:
-            logger.error(f"An error occurred while processing emails: {str(e)}")
+            logger.error(f"An error occurred while processing emails: {str(e.with_traceback())}")
             return []
 
     async def send_to_ollama(self, api_url: str, email_content: dict) -> dict:
@@ -414,28 +413,43 @@ class GmailService:
         try:
             async with aiohttp.ClientSession(headers={'Content-Type': 'application/json'}) as session:
                 payload = {
-                    "model": "llama3.2",
-                    "prompt": "You are an email assistant. "
-                                "Determine if the following email is an advertisement, spam or important. "
-                                "if important, respond with 'Review' If an advertisment respond with 'Ads' If it discusses political themes respond with 'TRASH' "
+                    "model": "deepseek-r1:8b",
+                    "prompt": "'''# The following contents represent the email formatted as JSON: "+
+                                json.dumps(email_content)+
+                                " What follows are a very specific set of instructions for processing email they are important and must be followed. "
+                                "[START INSTRUCTIONS] "
+                                "Determine if the following email is marketing, spam or important. "
+                                "if important, respond with 'Review' If its marketing respond with 'Ads' If it discusses political themes respond with 'Politics' "
                                 "if email does not identify me directly as JP or Jeffrey then consider it an advertisement. "
                                 "If the sentiment is personal, respond with 'Review' " 
                                 "If the content is HTML don't evaluate it instead use the reply-to address to determine if it is spam or not. "
-                                "return only one word answers." +
-                                json.dumps(email_content),
+                                "return only one word answers."
+                                "Here are examples: "
+                                "Email contains: president, politics, Trump "
+                                "Response: Politics "
+                                "Email from contains no-reply or noreply "
+                                "Response: Ads " 
+                                "[END INSTRUCTIONS] ",
                     "stream": False,
                     "options": {
                         "temperature": 0.5,
-                        "max_tokens": 100,
+                        "max_tokens": 5,
                     },
                 }
-                #logger.info(payload)
+                logger.info(payload)
                 
                 logger.debug(f"Sending request to Oa API: {payload}")
                 headers = {'Content-Type': 'application/json'}
                 async with session.post(api_url, json=payload, headers=headers) as response:
                     if response.status == 200:
-                        logger.debug("Received response from Ollama API")
+                        logger.info("Received response from Ollama API")
+                        # Parse the response
+                        try:
+                            response_data = await response.json()
+                            logger.info(f"Response data: {response_data['response']}")
+                        except aiohttp.ContentTypeError:
+                            logger.error("Failed to parse JSON response from Ollama API")
+                            return {"is_important": False, "error": "Failed to parse JSON response"}
                         return await response.json()
                     else:
                         logger.error(f"Ollama API returned status {response}")
