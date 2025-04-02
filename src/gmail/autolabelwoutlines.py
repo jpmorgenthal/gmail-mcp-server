@@ -6,6 +6,9 @@ from bs4 import BeautifulSoup
 import asyncio
 import logging
 import base64
+from outlines import models
+from llama_cpp import Llama
+
 import json
 from email.message import EmailMessage
 from email.header import decode_header
@@ -428,13 +431,14 @@ class GmailService:
             async with aiohttp.ClientSession(headers={'Content-Type': 'application/json'}) as session:
                 payload = {
                     #"model": "deepseek-r1:8b",
-                    "model": "ai/deepseek-r1-distill-llama:8B-Q4_K_M",
+                    "model": "ai/smollm2",
                     "messages":[{
                         "role": "user",
                         "content": "'''# The following contents represent the email formatted as JSON: "+
                                 json.dumps(email_content)+
                                 " What follows are a very specific set of instructions for processing email they are important and must be followed. "
-                                "[START INSTRUCTIONS] "
+                           
+                           +     "[START INSTRUCTIONS] "
                                 "Classify the email based on the audience. If directed to a general audience, respond with 'Ads' "
                                 "if specifically addressed to me, respond with 'Review' "
                                 "If it discusses political themes respond with 'Politics' "
@@ -788,5 +792,10 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 #    asyncio.run(main(args.creds_file_path, args.token_path))
+    llm = Llama("ai/smollm2")
+    model = models.LlamaCpp(llm)
+
+    print("model")
+
     asyncio.run(explicit(args.creds_file_path, args.token_path, args.training_file))
     

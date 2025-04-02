@@ -11,7 +11,9 @@ dependencies = [
     "google-auth-httplib2>=0.2.0",
     "google-auth-oauthlib>=1.2.1",
     "aiohttp",
-    "bs4"
+    "bs4",
+    "outlines",
+    "outlines[llamacpp]"
 ]
 [build-system]
 requires = [ "hatchling",]
